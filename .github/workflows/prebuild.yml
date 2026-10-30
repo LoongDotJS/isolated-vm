@@ -51,6 +51,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  prebuild:
+    needs: check-binaries
+    if: needs.check-binaries.outputs.create == '1'
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ macos-latest, windows-latest ]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: laverdet/isolated-vm
+          ref: ${{ needs.check-binaries.outputs.version }}
+      - name: Use nodejs
+        uses: actions/setup-node@v6
+        with:
+          node-version: latest
+      - name: Add msbuild to PATH
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v2
+      - name: Install node-gyp
+        if: matrix.os == 'windows-latest'
+        run: |
+          npm install --global node-gyp@latest
+      - name: Dependencies
+        run: |
+          npm install --ignore-scripts
+      - name: Build
+        run: |
+          npm run prebuild
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: prebuilds-${{ matrix.os }}
+          path: prebuilds
+
   prebuild-linux:
     needs: check-binaries
     if: needs.check-binaries.outputs.create == '1'
@@ -89,7 +125,7 @@ jobs:
 
   release:
     runs-on: ubuntu-slim
-    needs: [check-binaries, prebuild-linux]
+    needs: [check-binaries, prebuild, prebuild-linux]
     if: needs.check-binaries.outputs.create == '1'
     steps:
       - uses: actions/checkout@v6
@@ -111,8 +147,6 @@ jobs:
           find prebuilds -type f -name '*.node' | sort
       - name: Pack npm tarball
         run: |
-          sed -i 's#"name": "isolated-vm",#"name": "@loong64/isolated-vm",#g' package.json
-          sed -i 's#github.com/laverdet#github.com/loong64#g' package.json
           npm publish --access public
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
