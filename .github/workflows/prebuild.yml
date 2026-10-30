@@ -147,7 +147,7 @@ jobs:
           find prebuilds -type f -name '*.node' | sort
       - name: Pack npm tarball
         run: |
-          npm publish --access public
+          npm pack
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -158,3 +158,9 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: echo //${NPM_REGISTRY}/:_authToken=${NPM_TOKEN} > ~/.npmrc
+        env:
+          NPM_REGISTRY: ${{ vars.LOONGDOTJS_NPM_REGISTRY }}
+          NPM_TOKEN: ${{ secrets.LOONGDOTJS_NPM_TOKEN }}
+      - name: Publish
+        run: npm publish
