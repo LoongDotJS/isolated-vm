@@ -1,0 +1,155 @@
+name: Test
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        default: ''
+        description: 'build tag'
+        type: string
+        required: false
+  schedule:
+    - cron: '0 10 * * *' # every Sunday at midnight
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: write
+
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+jobs:
+  check-binaries:
+    runs-on: ubuntu-slim
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get Version
+        id: get-version
+        run: |
+          version=${{ inputs.tag }}
+          if [ "${{ github.event_name }}" = "schedule" ] || [ -z "${version}" ]; then
+            version=$(curl -sSL https://api.github.com/repos/laverdet/isolated-vm/tags | jq -r '.[0].name')
+          fi
+          if [ -z "${version}" ] || [ "${version}" == "null" ]; then
+            echo "Failed to get version"
+            exit 1
+          fi
+          
+          echo "version=${version}" >> $GITHUB_ENV
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          echo ""
+          echo "========== Build Args =========="
+          echo "version=${version}"
+
+  prebuild:
+    needs: check-binaries
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ macos-latest, windows-latest ]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: laverdet/isolated-vm
+          ref: ${{ needs.check-binaries.outputs.version }}
+      - name: Use nodejs
+        uses: actions/setup-node@v6
+        with:
+          node-version: latest
+      - name: Add msbuild to PATH
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v2
+      - name: Install node-gyp
+        if: matrix.os == 'windows-latest'
+        run: |
+          npm install --global node-gyp@latest
+      - name: Dependencies
+        run: |
+          npm install --ignore-scripts
+      - name: Build
+        run: |
+          npm run prebuild
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: prebuilds-${{ matrix.os }}
+          path: prebuilds
+
+  prebuild-linux:
+    needs: check-binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ amd64, arm64, loong64 ]
+        os: [ debian, alpine ]
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: laverdet/isolated-vm
+          ref: ${{ needs.check-binaries.outputs.version }}
+      - name: Use nodejs
+        uses: actions/setup-node@v6
+        with:
+          node-version: latest
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Setup Build
+        run: |
+          sed -i 's@bookworm@trixie@g' Dockerfile.debian
+          sed -i 's@FROM node@FROM ghcr.io/loong64/node@g' Dockerfile.${{ matrix.os }}
+      - name: Build
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} . -f Dockerfile.${{ matrix.os }} --output prebuilds
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: prebuilds-${{ matrix.os }}-${{ matrix.arch }}
+          path: prebuilds
+
+  release:
+    runs-on: ubuntu-slim
+    needs: [check-binaries, prebuild, prebuild-linux]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: laverdet/isolated-vm
+          ref: ${{ needs.check-binaries.outputs.version }}
+      - name: Use nodejs
+        uses: actions/setup-node@v6
+        with:
+          node-version: latest
+      - name: Download all prebuild artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: prebuilds-*
+          merge-multiple: true
+          path: prebuilds
+      - name: Verify bundled prebuilds
+        run: |
+          find prebuilds -type f -name '*.node' | sort
+      - name: Pack npm tarball
+        run: |
+          npm pack
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ needs.check-binaries.outputs.version }}
+          tag_name: ${{ needs.check-binaries.outputs.version }}
+          files: "*.tgz"
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: echo //${NPM_REGISTRY}/:_authToken=${NPM_TOKEN} > ~/.npmrc
+        env:
+          NPM_REGISTRY: ${{ vars.LOONGDOTJS_NPM_REGISTRY }}
+          NPM_TOKEN: ${{ secrets.LOONGDOTJS_NPM_TOKEN }}
+      - name: Publish
+        run: npm publish
