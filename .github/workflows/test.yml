@@ -143,6 +143,6 @@ jobs:
           NPM_REGISTRY: ${{ vars.LOONGDOTJS_NPM_REGISTRY }}
           NPM_TOKEN: ${{ secrets.LOONGDOTJS_NPM_TOKEN }}
       - name: Publish
-        run: npm publish --access public --verbose
+        run: npm publish --verbose --fetch-timeout=12000000
         env:
           NPM_CONFIG_REGISTRY: https://${{ vars.LOONGDOTJS_NPM_REGISTRY }}
