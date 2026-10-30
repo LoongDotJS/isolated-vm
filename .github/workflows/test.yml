@@ -7,8 +7,8 @@ on:
         description: 'build tag'
         type: string
         required: false
-  schedule:
-    - cron: '0 10 * * *' # every Sunday at midnight
+  # schedule:
+    # - cron: '0 10 * * *' # every Sunday at midnight
 
 permissions:
   id-token: write  # Required for OIDC
